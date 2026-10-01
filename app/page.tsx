@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { defaults, timezone } from "@/config/defaults";
-import { DAY, capacity, costs, timeline } from "@/lib/calc";
+import { DAY, capacity, costs, dayKey, timeline } from "@/lib/calc";
 import type { Planned, Settings, SyncData } from "@/lib/calc";
 
 const K_DATA = "sl-data", K_SETTINGS = "sl-settings", K_PLANNED = "sl-planned";
@@ -206,8 +206,8 @@ export default function Home() {
     return { ...p, launch, sourceBy: launch - s.sourceLeadsDaysBeforeDeadline * DAY };
   });
   const nextDeadline = [
-    ...sourcing.map((r) => ({ name: r.name, at: r.sourceBy })),
-    ...plannedWithDates.map((p) => ({ name: p.name, at: p.sourceBy })),
+    ...sourcing.map((r) => ({ at: r.sourceBy, sub: `~${num(r.batch)} leads for the ${r.inboxCount} inboxes freed after "${r.name}"` })),
+    ...plannedWithDates.map((p) => ({ at: p.sourceBy, sub: `${num(p.listSize)} leads for planned "${p.name}"` })),
   ].sort((a, b) => a.at - b.at)[0];
 
   const timelineItems = [
@@ -231,7 +231,7 @@ export default function Home() {
 
   // Daily report: "today" = the day of the last sync, in the configured timezone
   const daily = data?.daily ?? [];
-  const todayKey = data ? new Date(data.syncedAt).toLocaleDateString("en-CA", { timeZone: timezone }) : "";
+  const todayKey = data ? dayKey(new Date(data.syncedAt), timezone) : "";
   const sentToday = daily.find((d) => d.date === todayKey)?.sent ?? 0;
   const maxDaily = Math.max(1, cap.daily, ...daily.map((d) => d.sent));
   const soonest = rows[0];
@@ -240,8 +240,8 @@ export default function Home() {
   const actions = [
     ...sourcing.map((r) => ({
       late: r.sourceBy < now,
-      text: `Source ${num(r.batch)} new leads for "${r.name}" by ${date(r.sourceBy)}`,
-      why: `${r.inboxCount} inboxes free up when it ends ${date(r.est)}`,
+      text: `Source ~${num(r.batch)} new leads by ${date(r.sourceBy)}`,
+      why: `${r.inboxCount} inboxes free up when "${r.name}" ends on ${date(r.est)}. Use the leads for whatever you launch next.`,
     })),
     ...plannedWithDates.map((p) => ({
       late: p.sourceBy < now,
@@ -352,10 +352,10 @@ export default function Home() {
             <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
               <Kpi label="NET prospects / month" value={num(cap.netProspects)} sub={`${num(cap.leadsPerDay)} new leads needed / day`} />
               <Kpi
-                label="Next sourcing deadline"
+                label="Next lead-sourcing deadline"
                 accent="bg-amber-500"
                 value={nextDeadline ? date(nextDeadline.at) : "\u2014"}
-                sub={nextDeadline ? nextDeadline.name : "Nothing inside the planning window"}
+                sub={nextDeadline ? nextDeadline.sub : "Nothing inside the planning window"}
               />
               <Kpi
                 label="Soonest-ending campaign"
@@ -479,7 +479,7 @@ export default function Home() {
 
         {tab === "Sourcing" && (
           <>
-            <Card title={`Source new leads · campaigns ending within ${s.planningWindowDays} days`}>
+            <Card title={`Inboxes freeing up · campaigns ending within ${s.planningWindowDays} days`}>
               {sourcing.length === 0 ? (
                 empty("Nothing to source right now.")
               ) : (
@@ -487,13 +487,13 @@ export default function Home() {
                   {sourcing.map((r) => (
                     <div key={r.id} className="rounded-lg border border-slate-200 p-4">
                       <div className="flex items-start justify-between gap-2">
-                        <div className="font-medium">{r.name}</div>
+                        <div className="font-medium"><span className="text-xs font-normal text-slate-400">Frees up after</span><br />{r.name}</div>
                         <Chip kind={r.color}>{r.stalled ? "Stalled" : `${r.runway}d`}</Chip>
                       </div>
-                      <div className="mt-3 text-xs text-slate-500">Source new leads by</div>
+                      <div className="mt-3 text-xs text-slate-500">Source leads by</div>
                       <div className="text-xl font-bold">{date(r.sourceBy)}</div>
                       <div className="mt-2 text-sm text-slate-600">
-                        <b>{num(r.batch)}</b> leads <span className="text-slate-400">({r.inboxCount} inboxes freeing × {s.leadsPerFreedInbox})</span>
+                        <b>~{num(r.batch)}</b> leads for your next campaign <span className="text-slate-400">({r.inboxCount} inboxes × {s.leadsPerFreedInbox})</span>
                       </div>
                     </div>
                   ))}

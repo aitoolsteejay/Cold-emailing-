@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { timezone } from "@/config/defaults";
+import { dayKey } from "@/lib/calc";
 import type { Campaign, DailyStat, Mailbox, SyncData } from "@/lib/calc";
 
 export const dynamic = "force-dynamic";
@@ -109,7 +110,7 @@ export async function POST() {
     let daily: DailyStat[] = [];
     let dailyError: string | undefined;
     try {
-      const ymd = (d: Date) => d.toLocaleDateString("en-CA", { timeZone: timezone });
+      const ymd = (d: Date) => dayKey(d, timezone);
       const res = await sl("/analytics/day-wise-overall-stats", {
         start_date: ymd(new Date(Date.now() - 13 * 86400000)),
         end_date: ymd(new Date()),

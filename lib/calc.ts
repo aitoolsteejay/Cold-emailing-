@@ -22,6 +22,13 @@ export type Planned = { id: string; name: string; launchDate: string; sequenceLe
 
 export const DAY = 86400000;
 
+// YYYY-MM-DD for a moment, as seen in a given timezone (same result in every browser)
+export function dayKey(d: Date, timeZone: string) {
+  const parts = new Intl.DateTimeFormat("en-US", { timeZone, year: "numeric", month: "2-digit", day: "2-digit" }).formatToParts(d);
+  const get = (t: string) => parts.find((x) => x.type === t)!.value;
+  return `${get("year")}-${get("month")}-${get("day")}`;
+}
+
 export function capacity(s: Settings, mailboxes: Mailbox[]) {
   const daily = mailboxes.length
     ? mailboxes.reduce((sum, m) => sum + m.dailyLimit, 0)
