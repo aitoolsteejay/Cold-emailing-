@@ -76,6 +76,5 @@ export function costs(s: Settings, mailboxes: Mailbox[]) {
     total,
     perMailbox: boxes ? total / boxes : 0,
     perDomain: domains ? total / domains : 0,
-    firstYearMailboxes: boxes * s.mailboxCostFirstYearINR,
   };
 }

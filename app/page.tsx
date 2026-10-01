@@ -14,7 +14,6 @@ const labels: Record<keyof Settings, string> = {
   followUpDropOffPercent: "Follow-up drop-off %",
   sendingDaysPerMonth: "Sending days / month",
   domainCostPerYearINR: "Domain cost / year (₹)",
-  mailboxCostFirstYearINR: "Mailbox cost, first year (₹, one-off per mailbox)",
   mailboxCostPerMonthINR: "Mailbox cost / month (₹)",
   smartleadCostPerClientPerMonthINR: "Smartlead cost / client / month (₹)",
   sourceLeadsDaysBeforeDeadline: "Source leads N days before campaign ends",
@@ -334,7 +333,6 @@ export default function Home() {
             <Big label="Cost per domain / month" value={inr(cost.perDomain)} />
           </div>
         )}
-        {data && <p className="mt-3 text-xs text-slate-500">Mailbox first-year cost ({inr(cost.firstYearMailboxes)} across all mailboxes) is not included in the monthly figure.</p>}
       </Section>
 
       <Section title="Settings (all tunable numbers)">

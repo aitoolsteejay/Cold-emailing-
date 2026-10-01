@@ -10,7 +10,6 @@ export const defaults = {
 
   // Cost dashboard
   domainCostPerYearINR: 900,
-  mailboxCostFirstYearINR: 193,
   mailboxCostPerMonthINR: 325,
   smartleadCostPerClientPerMonthINR: 2000,
 
