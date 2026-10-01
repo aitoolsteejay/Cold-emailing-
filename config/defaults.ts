@@ -18,6 +18,9 @@ export const defaults = {
   leadsPerFreedInbox: 150, // leads to source per inbox that frees up when a campaign ends
   planningWindowDays: 14, // campaigns finishing within this many days show up in the sourcing planner
 
+  // Which campaigns to show
+  firstCampaignYear: 2026, // campaigns created before this year are ignored everywhere
+
   // Campaign runway colors (days left until estimated completion)
   runwayGreenAboveDays: 14, // green above this
   runwayRedBelowDays: 7, // red below this, amber in between

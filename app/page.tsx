@@ -19,13 +19,14 @@ const labels: Record<keyof Settings, string> = {
   sourceLeadsDaysBeforeDeadline: "Source leads N days before campaign ends",
   leadsPerFreedInbox: "Leads to source per freed inbox",
   planningWindowDays: "Sourcing planner window (days)",
+  firstCampaignYear: "Ignore campaigns created before (year)",
   runwayGreenAboveDays: "Runway green above (days)",
   runwayRedBelowDays: "Runway red below (days)",
 };
 const capacityKeys = ["totalActiveInboxes", "avgDailyLimitPerInbox", "sequenceLength", "followUpDropOffPercent", "sendingDaysPerMonth"] as const;
 const otherKeys = (Object.keys(defaults) as (keyof Settings)[]).filter((k) => !(capacityKeys as readonly string[]).includes(k));
 
-const tabs = ["Overview", "Campaigns", "Sourcing", "Replies", "Costs", "Settings"] as const;
+const tabs = ["Overview", "Campaigns", "Sourcing", "Replies", "Costs", "Inputs"] as const;
 type Tab = (typeof tabs)[number];
 
 const chip = {
@@ -193,7 +194,8 @@ export default function Home() {
 
   const mailboxes = data?.mailboxes ?? [];
   const cap = capacity(s, mailboxes);
-  const rows = data && now ? timeline(data.campaigns, s, now) : [];
+  const campaigns = (data?.campaigns ?? []).filter((c) => new Date(c.createdAt).getFullYear() >= s.firstCampaignYear);
+  const rows = data && now ? timeline(campaigns, s, now) : [];
   const cost = costs(s, mailboxes);
 
   const sourcing = rows
@@ -215,14 +217,33 @@ export default function Home() {
 
   const aggregate: Record<string, number> = {};
   const leadStatus: Record<string, number> = {};
+  const funnel = { sent: 0, opened: 0, replied: 0, bounced: 0 };
   let totalLeads = 0;
-  for (const c of data?.campaigns ?? []) {
+  for (const c of campaigns) {
     totalLeads += c.totalLeads;
+    funnel.sent += c.stats.sent;
+    funnel.opened += c.stats.opened;
+    funnel.replied += c.stats.replied;
+    funnel.bounced += c.stats.bounced;
     for (const [k, v] of Object.entries(c.categories)) aggregate[k] = (aggregate[k] ?? 0) + v;
     for (const [k, v] of Object.entries(c.leadStatus)) leadStatus[k] = (leadStatus[k] ?? 0) + v;
   }
 
   const soonest = rows[0];
+  const stalledCount = rows.filter((r) => r.stalled).length;
+  const pct = (a: number, b: number) => (b ? ((a / b) * 100).toFixed(1) + "%" : "0%");
+  const actions = [
+    ...sourcing.map((r) => ({
+      late: r.sourceBy < now,
+      text: `Source ${num(r.batch)} new leads for "${r.name}" by ${date(r.sourceBy)}`,
+      why: `${r.inboxCount} inboxes free up when it ends ${date(r.est)}`,
+    })),
+    ...plannedWithDates.map((p) => ({
+      late: p.sourceBy < now,
+      text: `Source ${num(p.listSize)} leads for planned campaign "${p.name}" by ${date(p.sourceBy)}`,
+      why: `Launches ${date(p.launch)}`,
+    })),
+  ].sort((a, b) => Number(b.late) - Number(a.late));
   const empty = (msg: string) => <p className="py-6 text-center text-sm text-slate-400">{msg}</p>;
 
   const timelineTable = (
@@ -305,64 +326,114 @@ export default function Home() {
 
         {tab === "Overview" && (
           <>
+            <div className="rounded-xl bg-gradient-to-r from-indigo-600 to-violet-600 p-6 text-white shadow-sm">
+              <div className="text-xs font-medium uppercase tracking-wide text-indigo-200">The big picture</div>
+              <p className="mt-2 text-lg leading-relaxed">
+                You send up to <b>{num(cap.daily)} emails a day</b>
+                {mailboxes.length > 0 && <> from <b>{mailboxes.length} mailboxes</b></>}. That reaches about <b>{num(cap.netProspects)} new prospects a month</b>, so you
+                need to feed in <b>{num(cap.leadsPerDay)} fresh leads every day</b>.{" "}
+                {data ? (
+                  <>
+                    Right now <b>{rows.length} campaigns</b> are running
+                    {stalledCount > 0 && <>, <b>{stalledCount}</b> of them past their projected end date</>}
+                    {actions.length > 0 ? <>, and <b>{actions.length} lead-sourcing {actions.length === 1 ? "task is" : "tasks are"} coming up</b>.</> : <>, and nothing needs sourcing yet.</>}
+                  </>
+                ) : (
+                  <>Click Sync Smartlead to load your campaigns.</>
+                )}
+              </p>
+            </div>
+
             <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
               <Kpi label="NET prospects / month" value={num(cap.netProspects)} sub={`${num(cap.leadsPerDay)} new leads needed / day`} />
               <Kpi
                 label="Next sourcing deadline"
                 accent="bg-amber-500"
-                value={nextDeadline ? date(nextDeadline.at) : "—"}
+                value={nextDeadline ? date(nextDeadline.at) : "\u2014"}
                 sub={nextDeadline ? nextDeadline.name : "Nothing inside the planning window"}
               />
               <Kpi
                 label="Soonest-ending campaign"
                 accent={soonest ? bar[soonest.color] : "bg-slate-300"}
-                value={soonest ? date(soonest.est) : "—"}
-                sub={soonest ? `${soonest.name} · ${soonest.runway < 0 ? `stalled ${-soonest.runway}d past` : `${soonest.runway} days left`}` : data ? "No running campaigns" : "Sync to load"}
+                value={soonest ? date(soonest.est) : "\u2014"}
+                sub={soonest ? `${soonest.name} \u00b7 ${soonest.runway < 0 ? `stalled ${-soonest.runway}d past` : `${soonest.runway} days left`}` : data ? "No running campaigns" : "Sync to load"}
               />
-              <Kpi label="Monthly infra cost" accent="bg-emerald-500" value={data ? inr(cost.total) : "—"} sub={data ? `${cost.boxes} mailboxes · ${cost.domains} domains` : "Sync to load"} />
+              <Kpi label="Monthly infra cost" accent="bg-emerald-500" value={data ? inr(cost.total) : "\u2014"} sub={data ? `${cost.boxes} mailboxes \u00b7 ${cost.domains} domains` : "Sync to load"} />
             </div>
 
+            <Card title="Capacity (change the numbers in the Inputs tab)">
+              <div className="grid grid-cols-2 gap-3 lg:grid-cols-5">
+                <Stat label="Total daily capacity" value={num(cap.daily)} sub={cap.fromSync ? "from synced mailboxes" : "from inputs"} />
+                <Stat label="Monthly capacity" value={num(cap.monthly)} />
+                <Stat label="Effective emails / prospect" value={cap.effective.toFixed(2)} />
+                <Stat label="NET prospects / month" value={num(cap.netProspects)} />
+                <Stat label="New leads needed / day" value={num(cap.leadsPerDay)} />
+              </div>
+            </Card>
+
             <div className="grid gap-5 xl:grid-cols-3">
-              <Card title="Capacity calculator" className="xl:col-span-2">
-                <div className="grid gap-5 lg:grid-cols-2">
-                  <Fields keys={capacityKeys} s={s} onChange={changeSetting} cols="grid-cols-2" />
-                  <div className="grid grid-cols-2 gap-3">
-                    <Stat label="Total daily capacity" value={num(cap.daily)} sub={cap.fromSync ? "from synced mailboxes" : "from inputs"} />
-                    <Stat label="Monthly capacity" value={num(cap.monthly)} />
-                    <Stat label="Effective emails / prospect" value={cap.effective.toFixed(2)} />
-                    <Stat label="NET prospects / month" value={num(cap.netProspects)} />
-                    <Stat label="New leads needed / day" value={num(cap.leadsPerDay)} />
-                  </div>
-                </div>
-              </Card>
-              <Card title="Lead status (all campaigns)">
-                {totalLeads ? (
-                  <>
-                    <div className="flex h-3 overflow-hidden rounded-full bg-slate-100">
-                      {Object.entries(leadStatus).map(([k, v]) => (
-                        <div key={k} className={statusColor[k] ?? "bg-slate-400"} style={{ width: `${(v / totalLeads) * 100}%` }} title={k} />
-                      ))}
-                    </div>
-                    <ul className="mt-4 space-y-1.5 text-sm">
-                      {Object.entries(leadStatus).map(([k, v]) => (
-                        <li key={k} className="flex items-center justify-between">
-                          <span className="flex items-center gap-2"><i className={`h-2.5 w-2.5 rounded-full ${statusColor[k] ?? "bg-slate-400"}`} />{k}</span>
-                          <span className="tabular-nums text-slate-500">{num(v)}</span>
-                        </li>
-                      ))}
-                    </ul>
-                  </>
+              <Card title="What to do next" className="xl:col-span-2">
+                {actions.length === 0 ? (
+                  empty(data ? "Nothing urgent. No campaign ends inside your planning window." : "Sync to see your to-do list.")
                 ) : (
-                  empty("Sync to see lead status.")
+                  <ul className="space-y-3">
+                    {actions.map((a, i) => (
+                      <li key={i} className="flex items-start gap-3">
+                        <span className={`mt-1 h-2.5 w-2.5 shrink-0 rounded-full ${a.late ? "bg-rose-500" : "bg-amber-500"}`} />
+                        <div>
+                          <div className="text-sm font-medium">{a.text} {a.late && <Chip kind="red">Overdue</Chip>}</div>
+                          <div className="text-xs text-slate-500">{a.why}</div>
+                        </div>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+                {stalledCount > 0 && (
+                  <p className="mt-4 rounded-lg bg-rose-50 p-3 text-sm text-rose-800">
+                    {stalledCount} {stalledCount === 1 ? "campaign is" : "campaigns are"} past the projected end date but still have leads in progress. Check them in the Campaigns tab.
+                  </p>
                 )}
               </Card>
+              <Card title="Sending results (all running campaigns)">
+                <div className="grid grid-cols-2 gap-3">
+                  <Stat label="Leads loaded" value={num(totalLeads)} />
+                  <Stat label="Emails sent" value={num(funnel.sent)} />
+                  <Stat label="Opened" value={num(funnel.opened)} sub={pct(funnel.opened, funnel.sent) + " of sent"} />
+                  <Stat label="Replied" value={num(funnel.replied)} sub={pct(funnel.replied, funnel.sent) + " of sent"} />
+                  <Stat label="Bounced" value={num(funnel.bounced)} sub={pct(funnel.bounced, funnel.sent) + " of sent"} />
+                  <Stat label="Mailboxes" value={num(mailboxes.length)} sub={`${cost.domains} domains`} />
+                </div>
+              </Card>
             </div>
 
             <div className="grid gap-5 xl:grid-cols-3">
-              <Card title="Campaign runway" className="xl:col-span-2">{timelineTable}</Card>
-              <Card title="Reply categories">
-                {totalLeads ? <Bars counts={aggregate} total={totalLeads} /> : empty("Sync to see replies.")}
-              </Card>
+              <Card title="Campaign runway · soonest-ending first" className="xl:col-span-2">{timelineTable}</Card>
+              <div className="space-y-5">
+                <Card title="Lead status">
+                  {totalLeads ? (
+                    <>
+                      <div className="flex h-3 overflow-hidden rounded-full bg-slate-100">
+                        {Object.entries(leadStatus).map(([k, v]) => (
+                          <div key={k} className={statusColor[k] ?? "bg-slate-400"} style={{ width: `${(v / totalLeads) * 100}%` }} title={k} />
+                        ))}
+                      </div>
+                      <ul className="mt-4 space-y-1.5 text-sm">
+                        {Object.entries(leadStatus).map(([k, v]) => (
+                          <li key={k} className="flex items-center justify-between">
+                            <span className="flex items-center gap-2"><i className={`h-2.5 w-2.5 rounded-full ${statusColor[k] ?? "bg-slate-400"}`} />{k}</span>
+                            <span className="tabular-nums text-slate-500">{num(v)}</span>
+                          </li>
+                        ))}
+                      </ul>
+                    </>
+                  ) : (
+                    empty("Sync to see lead status.")
+                  )}
+                </Card>
+                <Card title="Reply categories">
+                  {totalLeads ? <Bars counts={aggregate} total={totalLeads} /> : empty("Sync to see replies.")}
+                </Card>
+              </div>
             </div>
           </>
         )}
@@ -446,7 +517,7 @@ export default function Home() {
               {totalLeads ? <Bars counts={aggregate} total={totalLeads} /> : empty("Click Sync to load reply categories.")}
             </Card>
             <div className="grid gap-5 lg:grid-cols-2">
-              {(data?.campaigns ?? []).map((c) => (
+              {campaigns.map((c) => (
                 <Card key={c.id} title={c.name} right={<span className="text-xs text-slate-400">{c.status} · {num(c.totalLeads)} leads</span>}>
                   <div className="mb-4 grid grid-cols-4 gap-2 text-center">
                     <Stat label="Sent" value={num(c.stats.sent)} />
@@ -494,11 +565,17 @@ export default function Home() {
             <Card>{empty("Click Sync to load mailbox and domain counts.")}</Card>
           ))}
 
-        {tab === "Settings" && (
-          <Card title="All tunable numbers" right={<button onClick={reset} className="rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-medium">Reset to defaults</button>}>
-            <Fields keys={[...capacityKeys, ...otherKeys]} s={s} onChange={changeSetting} />
-            <p className="mt-4 text-xs text-slate-400">Defaults live in config/defaults.ts. Changes here are saved in this browser.</p>
-          </Card>
+        {tab === "Inputs" && (
+          <>
+            <Card title="Capacity inputs" right={<button onClick={reset} className="rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-medium">Reset all to defaults</button>}>
+              <Fields keys={capacityKeys} s={s} onChange={changeSetting} />
+              <p className="mt-3 text-xs text-slate-400">Once you have synced, daily capacity comes from your real mailboxes. Active inboxes and daily limit are only used before the first sync.</p>
+            </Card>
+            <Card title="Costs, sourcing and display">
+              <Fields keys={otherKeys} s={s} onChange={changeSetting} />
+              <p className="mt-4 text-xs text-slate-400">Defaults live in config/defaults.ts. Changes here are saved in this browser.</p>
+            </Card>
+          </>
         )}
       </main>
     </div>
