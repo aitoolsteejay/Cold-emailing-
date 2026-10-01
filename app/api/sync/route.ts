@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
-import type { Campaign, Mailbox, SyncData } from "@/lib/calc";
+import { timezone } from "@/config/defaults";
+import type { Campaign, DailyStat, Mailbox, SyncData } from "@/lib/calc";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
@@ -104,7 +105,27 @@ export async function POST() {
       });
     }
 
-    const data: SyncData = { syncedAt: new Date().toISOString(), campaigns, mailboxes };
+    // Daily report: emails sent per day for the last 14 days (today = sent so far)
+    let daily: DailyStat[] = [];
+    let dailyError: string | undefined;
+    try {
+      const ymd = (d: Date) => d.toLocaleDateString("en-CA", { timeZone: timezone });
+      const res = await sl("/analytics/day-wise-overall-stats", {
+        start_date: ymd(new Date(Date.now() - 13 * 86400000)),
+        end_date: ymd(new Date()),
+        timezone,
+      });
+      const list = res?.data?.day_wise_stats ?? res?.data ?? res?.day_wise_stats ?? [];
+      daily = (Array.isArray(list) ? list : []).map((d: any) => ({
+        date: String(d.date ?? d.day ?? "").slice(0, 10),
+        sent: Number(d.email_engagement_metrics?.sent ?? d.sent_count ?? d.sent ?? 0),
+      }));
+      if (daily.length === 0) dailyError = "Smartlead returned no daily data";
+    } catch (e) {
+      dailyError = e instanceof Error ? e.message : "Daily report failed";
+    }
+
+    const data: SyncData = { syncedAt: new Date().toISOString(), campaigns, mailboxes, daily, dailyError };
     return NextResponse.json(data);
   } catch (e) {
     return NextResponse.json({ error: e instanceof Error ? e.message : "Sync failed" }, { status: 502 });

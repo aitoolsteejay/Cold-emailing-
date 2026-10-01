@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { defaults } from "@/config/defaults";
+import { defaults, timezone } from "@/config/defaults";
 import { DAY, capacity, costs, timeline } from "@/lib/calc";
 import type { Planned, Settings, SyncData } from "@/lib/calc";
 
@@ -229,6 +229,11 @@ export default function Home() {
     for (const [k, v] of Object.entries(c.leadStatus)) leadStatus[k] = (leadStatus[k] ?? 0) + v;
   }
 
+  // Daily report: "today" = the day of the last sync, in the configured timezone
+  const daily = data?.daily ?? [];
+  const todayKey = data ? new Date(data.syncedAt).toLocaleDateString("en-CA", { timeZone: timezone }) : "";
+  const sentToday = daily.find((d) => d.date === todayKey)?.sent ?? 0;
+  const maxDaily = Math.max(1, cap.daily, ...daily.map((d) => d.sent));
   const soonest = rows[0];
   const stalledCount = rows.filter((r) => r.stalled).length;
   const pct = (a: number, b: number) => (b ? ((a / b) * 100).toFixed(1) + "%" : "0%");
@@ -360,6 +365,38 @@ export default function Home() {
               />
               <Kpi label="Monthly infra cost" accent="bg-emerald-500" value={data ? inr(cost.total) : "\u2014"} sub={data ? `${cost.boxes} mailboxes \u00b7 ${cost.domains} domains` : "Sync to load"} />
             </div>
+
+            <Card
+              title="Today's sending"
+              right={data && <span className="text-xs text-slate-400">as of {new Date(data.syncedAt).toLocaleTimeString("en-GB", { timeZone: timezone, hour: "2-digit", minute: "2-digit" })} (last sync)</span>}
+            >
+              {data?.dailyError && daily.length === 0 ? (
+                <p className="text-sm text-amber-700">Couldn&apos;t load the daily report: {data.dailyError}</p>
+              ) : !data ? (
+                empty("Sync to see how many emails went out today.")
+              ) : (
+                <div className="grid gap-6 lg:grid-cols-3">
+                  <div>
+                    <div className="text-xs text-slate-500">Emails sent today so far</div>
+                    <div className="text-4xl font-bold tracking-tight">{num(sentToday)}</div>
+                    <div className="mt-3"><Progress pct={cap.daily ? (sentToday / cap.daily) * 100 : 0} color="bg-indigo-500" /></div>
+                    <div className="mt-1 text-xs text-slate-500">of {num(cap.daily)} daily capacity</div>
+                  </div>
+                  <div className="lg:col-span-2">
+                    <div className="mb-2 text-xs text-slate-500">Last {daily.length} days</div>
+                    <div className="flex h-28 items-end gap-1">
+                      {daily.map((d) => (
+                        <div key={d.date} className="flex flex-1 flex-col items-center justify-end gap-1" title={`${d.date}: ${num(d.sent)} sent`}>
+                          <span className="text-[10px] tabular-nums text-slate-500">{num(d.sent)}</span>
+                          <div className={`w-full rounded-t ${d.date === todayKey ? "bg-indigo-500" : "bg-slate-300"}`} style={{ height: `${(d.sent / maxDaily) * 80}px` }} />
+                          <span className="text-[10px] text-slate-400">{new Date(d.date + "T00:00:00").toLocaleDateString("en-GB", { day: "numeric", month: "short" })}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              )}
+            </Card>
 
             <Card title="Capacity (change the numbers in the Inputs tab)">
               <div className="grid grid-cols-2 gap-3 lg:grid-cols-5">

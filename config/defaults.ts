@@ -25,3 +25,6 @@ export const defaults = {
   runwayGreenAboveDays: 14, // green above this
   runwayRedBelowDays: 7, // red below this, amber in between
 };
+
+// Timezone used to decide what "today" means for the daily sending report
+export const timezone = "Asia/Kolkata";

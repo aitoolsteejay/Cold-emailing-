@@ -16,7 +16,8 @@ export type Campaign = {
   stats: { sent: number; opened: number; replied: number; bounced: number };
 };
 export type Mailbox = { email: string; domain: string; dailyLimit: number };
-export type SyncData = { syncedAt: string; campaigns: Campaign[]; mailboxes: Mailbox[] };
+export type DailyStat = { date: string; sent: number }; // date as YYYY-MM-DD
+export type SyncData = { syncedAt: string; campaigns: Campaign[]; mailboxes: Mailbox[]; daily?: DailyStat[]; dailyError?: string };
 export type Planned = { id: string; name: string; launchDate: string; sequenceLength: number; listSize: number };
 
 export const DAY = 86400000;
