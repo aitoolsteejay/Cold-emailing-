@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
-import { timezone } from "@/config/defaults";
+import { rules, timezone } from "@/config/rules";
 import { dayKey } from "@/lib/calc";
-import type { Campaign, DailyStat, Mailbox } from "@/lib/calc";
+import type { SyncData, SyncedAccount } from "@/lib/calc";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
@@ -9,9 +9,17 @@ export const maxDuration = 300;
 const BASE = "https://server.smartlead.ai/api/v1";
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-// Smartlead allows 10 req / 2s; one call every 200ms stays at 5/s.
+// Smartlead allows 10 requests / 2s. Calls are spaced 220ms apart (~4.5/s) even when run in parallel.
+let nextSlot = 0;
+async function throttle() {
+  const now = Date.now();
+  const wait = Math.max(0, nextSlot - now);
+  nextSlot = Math.max(now, nextSlot) + 220;
+  if (wait) await sleep(wait);
+}
+
 async function sl(path: string, params: Record<string, string | number> = {}, retries = 3): Promise<any> {
-  await sleep(200);
+  await throttle();
   const url = new URL(BASE + path);
   for (const [k, v] of Object.entries(params)) url.searchParams.set(k, String(v));
   url.searchParams.set("api_key", process.env.SMARTLEAD_API_KEY!);
@@ -24,120 +32,76 @@ async function sl(path: string, params: Record<string, string | number> = {}, re
   return res.json();
 }
 
-type RawCampaign = { id: number; name: string; status: string; created_at: string };
+// "98%", "98", 98 -> 98
+function percent(v: unknown): number | null {
+  if (v == null || v === "") return null;
+  const n = parseFloat(String(v));
+  return Number.isFinite(n) ? n : null;
+}
 
-// Step 1: everything small and account-wide
-async function syncBase(fromYear: number) {
-  // Category id -> name, straight from the account
-  const cats: Record<string, string> = {};
-  for (const c of await sl("/leads/fetch-categories")) cats[c.id] = c.name;
+// Runs fn over items, at most `limit` at a time
+async function pool<T, R>(items: T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
+  const out: R[] = new Array(items.length);
+  let i = 0;
+  const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (i < items.length) {
+      const idx = i++;
+      out[idx] = await fn(items[idx]);
+    }
+  });
+  await Promise.all(workers);
+  return out;
+}
 
-  const mailboxes: Mailbox[] = [];
+async function sync(): Promise<SyncData> {
+  // 1. Every sender account, with warmup details
+  const raw: any[] = [];
   for (let offset = 0; ; offset += 100) {
     const page = await sl("/email-accounts/", { offset, limit: 100 });
-    for (const a of page) {
-      const email: string = a.from_email ?? a.email ?? "";
-      mailboxes.push({ email, domain: email.split("@")[1]?.toLowerCase() ?? "", dailyLimit: a.message_per_day ?? 0 });
+    const rows = Array.isArray(page) ? page : page?.data ?? [];
+    raw.push(...rows);
+    if (rows.length < 100) break;
+  }
+
+  // 2. Which accounts sit in an in-use campaign
+  const campaigns: any[] = await sl("/campaigns/");
+  const inUse = (Array.isArray(campaigns) ? campaigns : []).filter((c) => rules.inUseCampaignStatuses.includes(c.status));
+  const usedBy = new Map<string, string[]>(); // key: account id or email
+  await pool(inUse, 3, async (c) => {
+    const accounts = await sl(`/campaigns/${c.id}/email-accounts`);
+    for (const a of Array.isArray(accounts) ? accounts : []) {
+      const keys = [`id:${a.id}`, `email:${String(a.from_email ?? a.email ?? "").toLowerCase()}`];
+      for (const k of keys) usedBy.set(k, [...new Set([...(usedBy.get(k) ?? []), c.name])]);
     }
-    if (page.length < 100) break;
-  }
+  });
 
-  // Old campaigns are skipped here so we never spend API calls on them
-  const all: RawCampaign[] = await sl("/campaigns/");
-  const campaigns = all
-    .filter((c) => new Date(c.created_at).getFullYear() >= fromYear)
-    .map((c) => ({ id: c.id, name: c.name, status: c.status, created_at: c.created_at }));
+  const accounts: SyncedAccount[] = raw
+    .map((a) => {
+      const email = String(a.from_email ?? a.email ?? a.username ?? "").trim().toLowerCase();
+      const created = a.created_at ? new Date(a.created_at) : null;
+      const used = [...new Set([...(usedBy.get(`id:${a.id}`) ?? []), ...(usedBy.get(`email:${email}`) ?? [])])];
+      return {
+        id: Number(a.id),
+        email,
+        domain: email.split("@")[1] ?? "",
+        createdOn: created && !isNaN(created.getTime()) ? dayKey(created, timezone) : null,
+        dailyLimit: Number(a.message_per_day ?? 0),
+        warmupStatus: a.warmup_details?.status ?? null,
+        reputation: percent(a.warmup_details?.warmup_reputation),
+        campaigns: used,
+      };
+    })
+    .filter((a) => a.email.includes("@"));
 
-  // Daily report: emails sent per day for the last 14 days (today = sent so far)
-  let daily: DailyStat[] = [];
-  let dailyError: string | undefined;
-  try {
-    const ymd = (d: Date) => dayKey(d, timezone);
-    const res = await sl("/analytics/day-wise-overall-stats", {
-      start_date: ymd(new Date(Date.now() - 13 * 86400000)),
-      end_date: ymd(new Date()),
-      timezone,
-    });
-    const list = res?.data?.day_wise_stats ?? res?.data ?? res?.day_wise_stats ?? [];
-    daily = (Array.isArray(list) ? list : []).map((d: any) => ({
-      date: String(d.date ?? d.day ?? "").slice(0, 10),
-      sent: Number(d.email_engagement_metrics?.sent ?? d.sent_count ?? d.sent ?? 0),
-    }));
-    if (daily.length === 0) dailyError = "Smartlead returned no daily data";
-  } catch (e) {
-    dailyError = e instanceof Error ? e.message : "Daily report failed";
-  }
-
-  return { cats, mailboxes, campaigns, daily, dailyError };
+  return { syncedAt: new Date().toISOString(), accounts, campaignsChecked: inUse.length };
 }
 
-// Step 2 (one call per campaign): sequence delays, inboxes, leads, statistics
-async function syncCampaign(c: RawCampaign, cats: Record<string, string>): Promise<Campaign> {
-  const seqs = await sl(`/campaigns/${c.id}/sequences`);
-  const stepDelays = [...seqs]
-    .sort((a: any, b: any) => a.seq_number - b.seq_number)
-    .map((s: any) => s.seq_delay_details?.delayInDays ?? s.seq_delay_details?.delay_in_days ?? 0);
-
-  const inboxCount = (await sl(`/campaigns/${c.id}/email-accounts`)).length;
-
-  const leadStatus: Record<string, number> = {};
-  const categories: Record<string, number> = {};
-  let totalLeads = 0;
-  for (let offset = 0; ; offset += 100) {
-    const page = await sl(`/campaigns/${c.id}/leads`, { offset, limit: 100 });
-    const rows = page.data ?? [];
-    for (const l of rows) {
-      totalLeads++;
-      leadStatus[l.status] = (leadStatus[l.status] ?? 0) + 1;
-      const catId = l.lead_category_id ?? l.lead?.lead_category_id;
-      const name = catId != null ? cats[catId] ?? `Category ${catId}` : "No category";
-      categories[name] = (categories[name] ?? 0) + 1;
-    }
-    if (rows.length < 100 || totalLeads >= Number(page.total_leads ?? 0)) break;
-  }
-
-  // Statistics: send/open/reply/bounce counts + earliest send time
-  const stats = { sent: 0, opened: 0, replied: 0, bounced: 0 };
-  let earliest = Infinity;
-  for (let offset = 0, page = 0; page < 30; offset += 1000, page++) {
-    const res = await sl(`/campaigns/${c.id}/statistics`, { offset, limit: 1000 });
-    const rows = res.data ?? [];
-    for (const r of rows) {
-      if (r.sent_time) {
-        stats.sent++;
-        earliest = Math.min(earliest, new Date(r.sent_time).getTime());
-      }
-      if (r.open_time) stats.opened++;
-      if (r.reply_time) stats.replied++;
-      if (r.is_bounced) stats.bounced++;
-    }
-    if (rows.length < 1000) break;
-  }
-
-  return {
-    id: c.id,
-    name: c.name,
-    status: c.status,
-    createdAt: c.created_at,
-    stepDelays,
-    startDate: Number.isFinite(earliest) ? new Date(earliest).toISOString() : null,
-    totalLeads,
-    leadStatus,
-    categories,
-    inboxCount,
-    stats,
-  };
-}
-
-// The browser calls this several times: {step:"base", fromYear}, then {step:"campaign", campaign, cats} per campaign
-export async function POST(req: Request) {
+export async function POST() {
   if (!process.env.SMARTLEAD_API_KEY) {
     return NextResponse.json({ error: "SMARTLEAD_API_KEY is not set" }, { status: 500 });
   }
   try {
-    const body = await req.json();
-    if (body.step === "campaign") return NextResponse.json(await syncCampaign(body.campaign, body.cats));
-    return NextResponse.json(await syncBase(Number(body.fromYear) || 0));
+    return NextResponse.json(await sync());
   } catch (e) {
     return NextResponse.json({ error: e instanceof Error ? e.message : "Sync failed" }, { status: 502 });
   }
