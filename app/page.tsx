@@ -153,6 +153,7 @@ export default function Home() {
   const [data, setData] = useState<SyncData | null>(null);
   const [planned, setPlanned] = useState<Planned[]>([]);
   const [syncing, setSyncing] = useState(false);
+  const [progress, setProgress] = useState("");
   const [error, setError] = useState("");
   const [form, setForm] = useState({ name: "", launchDate: "", sequenceLength: defaults.sequenceLength, listSize: 0 });
   const [now, setNow] = useState(0);
@@ -177,18 +178,43 @@ export default function Home() {
     setPlanned(list);
     save(K_PLANNED, list);
   }
+  async function call(body: object) {
+    const res = await fetch("/api/sync", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+    const text = await res.text();
+    let json: any;
+    try {
+      json = JSON.parse(text);
+    } catch {
+      throw new Error(`Server error ${res.status}: the request took too long or failed`);
+    }
+    if (!res.ok) throw new Error(json.error ?? "Sync failed");
+    return json;
+  }
   async function sync() {
     setSyncing(true);
     setError("");
     try {
-      const res = await fetch("/api/sync", { method: "POST" });
-      const json = await res.json();
-      if (!res.ok) throw new Error(json.error ?? "Sync failed");
-      setData(json);
-      save(K_DATA, json);
+      setProgress("Loading mailboxes…");
+      const base = await call({ step: "base", fromYear: s.firstCampaignYear });
+      const list: SyncData["campaigns"] = [];
+      const failed: string[] = [];
+      for (let i = 0; i < base.campaigns.length; i++) {
+        const c = base.campaigns[i];
+        setProgress(`Campaign ${i + 1} of ${base.campaigns.length}`);
+        try {
+          list.push(await call({ step: "campaign", campaign: c, cats: base.cats }));
+        } catch {
+          failed.push(c.name);
+        }
+      }
+      if (failed.length) setError(`Couldn't load ${failed.length} campaign(s): ${failed.join(", ")}. Click Sync again to retry.`);
+      const next: SyncData = { syncedAt: new Date().toISOString(), campaigns: list, mailboxes: base.mailboxes, daily: base.daily, dailyError: base.dailyError };
+      setData(next);
+      save(K_DATA, next);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Sync failed");
     }
+    setProgress("");
     setSyncing(false);
   }
 
@@ -315,7 +341,7 @@ export default function Home() {
         </nav>
         <div className="border-t border-slate-800 p-4">
           <button onClick={sync} disabled={syncing} className="w-full rounded-lg bg-white py-2 text-sm font-semibold text-slate-900 disabled:opacity-60">
-            {syncing ? "Syncing…" : "Sync Smartlead"}
+            {syncing ? progress || "Syncing…" : "Sync Smartlead"}
           </button>
           <div className="mt-2 text-xs text-slate-500">{data ? `Last synced ${new Date(data.syncedAt).toLocaleString("en-GB")}` : "Never synced"}</div>
         </div>
