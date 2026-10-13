@@ -1,6 +1,6 @@
 import "./globals.css";
 
-export const metadata = { title: "Cold Email Dashboard" };
+export const metadata = { title: "Cold Email Capacity" };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
