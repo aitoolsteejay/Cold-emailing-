@@ -1,8 +1,8 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { maxEmailsPerDomain, rules, timezone } from "@/config/rules";
-import { buildInventory, dayKey, daysBetween, domainsForTarget, isYmd, leadsNeeded, rampUp } from "@/lib/calc";
+import { rules, timezone } from "@/config/rules";
+import { buildInventory, dayKey, daysBetween, domainsForTarget, isYmd, leadsNeeded, rampUp, sendingRate } from "@/lib/calc";
 import type { Domain, Id, PurchaseDates, SyncData } from "@/lib/calc";
 
 const K_SYNC = "ce-sync", K_DATES = "ce-dates", K_TARGET = "ce-target";
@@ -132,12 +132,13 @@ export default function Home() {
 
   if (!today) return <div className="p-8 text-sm text-slate-400">Loading…</div>;
 
-  const domains = buildInventory(sync, dates, today);
+  const rate = sendingRate(sync); // emails / id / day, from Smartlead
+  const domains = buildInventory(sync, dates, today, rate);
   const unused = domains.flatMap((d) => d.ids).filter((i) => i.unused);
   const unusedCount = override ?? unused.length;
   const leads = leadsNeeded(unusedCount);
-  const ramp = rampUp(domains);
-  const goal = domainsForTarget(target, ramp.maxCapacity);
+  const ramp = rampUp(domains, rate);
+  const goal = domainsForTarget(target, ramp.maxCapacity, rate);
 
   // Empty value = go back to the date estimated from Smartlead
   function setPurchase(domain: string, ymd: string) {
@@ -250,13 +251,13 @@ export default function Home() {
       <section className="space-y-4">
         <h2 className="text-lg font-semibold">2 · Sending capacity &amp; ramp-up</h2>
         <p className="-mt-2 text-xs text-slate-500">
-          Rules: {rules.emailsPerId} emails / id / day · {rules.idsPerDomain} ids / domain = {maxEmailsPerDomain} emails / domain / day · a new domain starts with {rules.initialIdsPerDomain} ids, the rest can be added {rules.monthsBeforeFullDomain} month{rules.monthsBeforeFullDomain === 1 ? "" : "s"} after buying it.
+          Rules: {rate} emails / id / day{sync ? " (the daily limit most ids have in Smartlead)" : ""} · {rules.idsPerDomain} ids / domain = {rate * rules.idsPerDomain} emails / domain / day · a new domain starts with {rules.initialIdsPerDomain} ids, the rest can be added {rules.monthsBeforeFullDomain} month{rules.monthsBeforeFullDomain === 1 ? "" : "s"} after buying it.
         </p>
 
         <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
           <Kpi label="Domains" value={num(ramp.domains)} />
           <Kpi label="IDs" value={`${num(ramp.ids)} / ${num(ramp.maxIds)}`} sub={`${plural(ramp.openSlots, "slot")} open`} />
-          <Kpi label="Can send now" value={`${num(ramp.capacityNow)} / day`} sub={`${num(ramp.ids)} ids × ${rules.emailsPerId}`} />
+          <Kpi label="Can send now" value={`${num(ramp.capacityNow)} / day`} sub={ramp.offRate.length ? "sum of Smartlead daily limits" : `${num(ramp.ids)} ids × ${rate}`} />
           <Kpi label="Max when all domains full" value={`${num(ramp.maxCapacity)} / day`} sub={`+${num(ramp.maxCapacity - ramp.capacityNow)} still to unlock`} />
         </div>
 
@@ -280,9 +281,9 @@ export default function Home() {
                   {ramp.addNow > 0 && (
                     <tr className="border-b border-slate-100">
                       <td className="py-2 pr-4"><Tag kind="amber">Now</Tag></td>
-                      <td className="py-2 pr-4 whitespace-nowrap">{plural(ramp.addNow, "id")} · +{num(ramp.addNow * rules.emailsPerId)}/day</td>
+                      <td className="py-2 pr-4 whitespace-nowrap">{plural(ramp.addNow, "id")} · +{num(ramp.addNow * rate)}/day</td>
                       <td className="py-2 pr-4 text-xs text-slate-500">{ramp.addNowDomains.map((d) => `${d.domain} (+${d.addNow})`).join(", ")}</td>
-                      <td className="py-2 text-right tabular-nums">{num(ramp.capacityNow + ramp.addNow * rules.emailsPerId)}/day</td>
+                      <td className="py-2 text-right tabular-nums">{num(ramp.capacityNow + ramp.addNow * rate)}/day</td>
                     </tr>
                   )}
                   {ramp.steps.map((s) => (
@@ -302,6 +303,11 @@ export default function Home() {
           {ramp.overLimit.length > 0 && (
             <p className="mt-4 rounded-lg bg-rose-50 p-3 text-sm text-rose-800">
               Over the limit: {ramp.overLimit.map((d) => `${d.domain} has ${d.count} ids (max ${d.allowedNow} right now)`).join("; ")}.
+            </p>
+          )}
+          {ramp.offRate.length > 0 && (
+            <p className="mt-4 rounded-lg bg-amber-50 p-3 text-sm text-amber-800">
+              {plural(ramp.offRate.length, "id")} not at {rate}/day in Smartlead: {ramp.offRate.map((i) => `${i.email} (${i.dailyLimit})`).join(", ")}.
             </p>
           )}
 
@@ -378,7 +384,11 @@ export default function Home() {
                         <td className="py-2 pr-4 whitespace-nowrap tabular-nums">
                           {d.count} / {rules.idsPerDomain}
                         </td>
-                        <td className="py-2 pr-4 tabular-nums">{d.capacity}</td>
+                        <td className="py-2 pr-4 tabular-nums">
+                          <span className={d.offRate.length ? "text-amber-700" : ""} title={d.offRate.length ? `${plural(d.offRate.length, "id")} not at ${rate}/day` : undefined}>
+                            {d.capacity}
+                          </span>
+                        </td>
                         <td className="py-2 pr-4"><Rep value={d.reputation} /></td>
                         <td className="py-2">{nextStep(d)}</td>
                       </tr>,
@@ -391,6 +401,7 @@ export default function Home() {
                                   <tr key={i.email}>
                                     <td className="py-1 pr-4">{i.email}</td>
                                     <td className="py-1 pr-4 text-slate-500">{i.createdOn ? fmt(i.createdOn) : "—"}</td>
+                                    <td className={`py-1 pr-4 tabular-nums ${i.dailyLimit !== rate ? "font-medium text-amber-700" : "text-slate-500"}`}>{i.dailyLimit}/day</td>
                                     <td className="py-1 pr-4"><Rep value={i.reputation} /></td>
                                     <td className="py-1">{idNote(i)}</td>
                                   </tr>

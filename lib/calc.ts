@@ -1,4 +1,4 @@
-import { maxEmailsPerDomain, rules } from "@/config/rules";
+import { rules } from "@/config/rules";
 
 // ---------- Data shapes ----------
 
@@ -22,6 +22,7 @@ export type Id = {
   email: string;
   domain: string;
   createdOn: string | null;
+  dailyLimit: number; // emails / day as set in Smartlead
   reputation: number | null;
   warmupStatus: string | null;
   campaigns: string[];
@@ -34,7 +35,8 @@ export type Domain = {
   sinceIsEstimate: boolean;
   ids: Id[];
   count: number;
-  capacity: number; // emails / day right now
+  capacity: number; // emails / day right now: sum of the ids' Smartlead daily limits
+  offRate: Id[]; // ids whose daily limit differs from the usual one
   unlockOn: string | null; // date the remaining ids can be added
   addNow: number; // ids that can be added today
   addLater: number; // ids that can be added on unlockOn
@@ -71,9 +73,20 @@ export const daysBetween = (from: string, to: string) => Math.round((toUtc(to) -
 
 export const isYmd = (s: unknown): s is string => typeof s === "string" && /^\d{4}-\d{2}-\d{2}$/.test(s);
 
+// ---------- Emails per id: read from Smartlead ----------
+
+// The daily limit most ids have in Smartlead (ties go to the higher limit); rules.emailsPerId before the first sync
+export function sendingRate(sync: SyncData | null) {
+  const counts = new Map<number, number>();
+  for (const a of sync?.accounts ?? []) if (a.dailyLimit > 0) counts.set(a.dailyLimit, (counts.get(a.dailyLimit) ?? 0) + 1);
+  let rate = rules.emailsPerId, best = 0;
+  for (const [limit, n] of counts) if (n > best || (n === best && limit > rate)) [rate, best] = [limit, n];
+  return rate;
+}
+
 // ---------- Inventory: Smartlead sender accounts grouped by domain ----------
 
-export function buildInventory(sync: SyncData | null, dates: PurchaseDates, today: string): Domain[] {
+export function buildInventory(sync: SyncData | null, dates: PurchaseDates, today: string, rate: number): Domain[] {
   const byDomain = new Map<string, Id[]>();
   for (const a of sync?.accounts ?? []) {
     if (!a.domain) continue;
@@ -81,6 +94,7 @@ export function buildInventory(sync: SyncData | null, dates: PurchaseDates, toda
       email: a.email,
       domain: a.domain,
       createdOn: a.createdOn,
+      dailyLimit: a.dailyLimit,
       reputation: a.reputation,
       warmupStatus: a.warmupStatus,
       campaigns: a.campaigns,
@@ -109,7 +123,8 @@ export function buildInventory(sync: SyncData | null, dates: PurchaseDates, toda
       sinceIsEstimate: !set && since != null,
       ids: list,
       count,
-      capacity: Math.min(count, rules.idsPerDomain) * rules.emailsPerId,
+      capacity: list.reduce((s, i) => s + i.dailyLimit, 0),
+      offRate: list.filter((i) => i.dailyLimit !== rate),
       unlockOn: unlocked ? null : unlockOn,
       addNow,
       addLater,
@@ -133,10 +148,11 @@ export function leadsNeeded(unusedIds: number) {
 
 export type RampStep = { on: string; domains: string[]; ids: number; emails: number; capacityAfter: number };
 
-export function rampUp(domains: Domain[]) {
+// rate = emails / day for every id still to be added
+export function rampUp(domains: Domain[], rate: number) {
   const ids = domains.reduce((s, d) => s + d.count, 0);
   const capacityNow = domains.reduce((s, d) => s + d.capacity, 0);
-  const maxCapacity = domains.length * maxEmailsPerDomain;
+  const openSlots = domains.reduce((s, d) => s + Math.max(0, rules.idsPerDomain - d.count), 0);
   const addNowDomains = domains.filter((d) => d.addNow > 0);
   const addNow = addNowDomains.reduce((s, d) => s + d.addNow, 0);
 
@@ -144,37 +160,39 @@ export function rampUp(domains: Domain[]) {
   for (const d of domains) {
     if (d.addLater > 0 && d.unlockOn) byDate.set(d.unlockOn, [...(byDate.get(d.unlockOn) ?? []), d]);
   }
-  let running = capacityNow + addNow * rules.emailsPerId;
+  let running = capacityNow + addNow * rate;
   const steps: RampStep[] = [...byDate.entries()]
     .sort((a, b) => a[0].localeCompare(b[0]))
     .map(([on, list]) => {
       const n = list.reduce((s, d) => s + d.addLater, 0);
-      running += n * rules.emailsPerId;
-      return { on, domains: list.map((d) => d.domain), ids: n, emails: n * rules.emailsPerId, capacityAfter: running };
+      running += n * rate;
+      return { on, domains: list.map((d) => d.domain), ids: n, emails: n * rate, capacityAfter: running };
     });
 
   return {
     domains: domains.length,
     ids,
     maxIds: domains.length * rules.idsPerDomain,
-    openSlots: domains.reduce((s, d) => s + Math.max(0, rules.idsPerDomain - d.count), 0),
+    openSlots,
     capacityNow,
-    maxCapacity,
+    maxCapacity: capacityNow + openSlots * rate,
     addNow,
     addNowDomains,
     steps,
     overLimit: domains.filter((d) => d.overLimit),
+    offRate: domains.flatMap((d) => d.offRate),
   };
 }
 
 // How many new domains to buy to reach a daily sending target, on top of full current capacity
-export function domainsForTarget(target: number, maxCapacity: number) {
+export function domainsForTarget(target: number, maxCapacity: number, rate: number) {
+  const perDomain = rate * rules.idsPerDomain;
   const gap = Math.max(0, target - maxCapacity);
-  const buy = Math.ceil(gap / maxEmailsPerDomain);
+  const buy = Math.ceil(gap / perDomain);
   return {
     gap,
     buy,
-    dayOne: buy * rules.initialIdsPerDomain * rules.emailsPerId,
-    full: buy * maxEmailsPerDomain,
+    dayOne: buy * rules.initialIdsPerDomain * rate,
+    full: buy * perDomain,
   };
 }

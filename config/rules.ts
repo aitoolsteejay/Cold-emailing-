@@ -6,7 +6,7 @@ export const rules = {
   leadsTolerancePercent: 5, // +/- range shown around the lead count
 
   // Domains and ids
-  emailsPerId: 25, // emails per id per day
+  emailsPerId: 25, // emails per id per day; only used until Smartlead is synced (then the daily limit most ids have there is used)
   idsPerDomain: 4, // max ids on one domain (4 x 25 = 100 emails / day)
   initialIdsPerDomain: 2, // ids allowed in the first period after buying a domain
   monthsBeforeFullDomain: 1, // after this many months the remaining ids can be added
@@ -15,8 +15,6 @@ export const rules = {
   inUseCampaignStatuses: ["ACTIVE", "PAUSED", "DRAFTED"], // an id attached to a campaign in one of these is "in use"
   lowReputationBelow: 90, // warmup reputation (%) under this is flagged red
 };
-
-export const maxEmailsPerDomain = rules.emailsPerId * rules.idsPerDomain;
 
 // Timezone used to decide what "today" is
 export const timezone = "Asia/Kolkata";
