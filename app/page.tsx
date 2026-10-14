@@ -224,15 +224,20 @@ export default function Home() {
   const rows = data && now ? timeline(campaigns, s, now) : [];
   const cost = costs(s, mailboxes);
 
+  // Sourcing is driven only by ACTIVE campaigns, and only inboxes no other active campaign still uses count as freed
   const sourcing = rows
-    .filter((r) => r.runway <= s.planningWindowDays)
-    .map((r) => ({ ...r, sourceBy: r.est - s.sourceLeadsDaysBeforeDeadline * DAY, batch: s.leadsPerFreedInbox * r.inboxCount }));
+    .filter((r) => r.status === "ACTIVE" && r.runway <= s.planningWindowDays)
+    .map((r) => {
+      const others = new Set(campaigns.filter((c) => c.status === "ACTIVE" && c.id !== r.id).flatMap((c) => c.inboxEmails ?? []));
+      const freed = r.inboxEmails ? r.inboxEmails.filter((e) => !others.has(e)).length : r.inboxCount;
+      return { ...r, freed, sourceBy: r.est - s.sourceLeadsDaysBeforeDeadline * DAY, batch: s.leadsPerFreedInbox * freed };
+    });
   const plannedWithDates = planned.map((p) => {
     const launch = new Date(p.launchDate).getTime();
     return { ...p, launch, sourceBy: launch - s.sourceLeadsDaysBeforeDeadline * DAY };
   });
   const nextDeadline = [
-    ...sourcing.map((r) => ({ at: r.sourceBy, sub: `~${num(r.batch)} leads for the ${r.inboxCount} inboxes freed after "${r.name}"` })),
+    ...sourcing.map((r) => ({ at: r.sourceBy, sub: `~${num(r.batch)} leads for the ${r.freed} inboxes freed after "${r.name}"` })),
     ...plannedWithDates.map((p) => ({ at: p.sourceBy, sub: `${num(p.listSize)} leads for planned "${p.name}"` })),
   ].sort((a, b) => a.at - b.at)[0];
 
@@ -267,7 +272,7 @@ export default function Home() {
     ...sourcing.map((r) => ({
       late: r.sourceBy < now,
       text: `Source ~${num(r.batch)} new leads by ${date(r.sourceBy)}`,
-      why: `${r.inboxCount} inboxes free up when "${r.name}" ends on ${date(r.est)}. Use the leads for whatever you launch next.`,
+      why: `${r.freed} inboxes free up when "${r.name}" ends on ${date(r.est)}${r.inboxCount > r.freed ? ` (${r.inboxCount - r.freed} more are shared with other active campaigns)` : ""}. Use the leads for whatever you launch next.`,
     })),
     ...plannedWithDates.map((p) => ({
       late: p.sourceBy < now,
@@ -519,7 +524,7 @@ export default function Home() {
                       <div className="mt-3 text-xs text-slate-500">Source leads by</div>
                       <div className="text-xl font-bold">{date(r.sourceBy)}</div>
                       <div className="mt-2 text-sm text-slate-600">
-                        <b>~{num(r.batch)}</b> leads for your next campaign <span className="text-slate-400">({r.inboxCount} inboxes × {s.leadsPerFreedInbox})</span>
+                        <b>~{num(r.batch)}</b> leads for your next campaign <span className="text-slate-400">({r.freed} freed inboxes × {s.leadsPerFreedInbox}{r.inboxCount > r.freed ? `, ${r.inboxCount - r.freed} shared with other active campaigns` : ""})</span>
                       </div>
                     </div>
                   ))}

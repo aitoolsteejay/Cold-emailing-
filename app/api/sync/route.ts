@@ -78,7 +78,11 @@ async function syncCampaign(c: RawCampaign, cats: Record<string, string>): Promi
     .sort((a: any, b: any) => a.seq_number - b.seq_number)
     .map((s: any) => s.seq_delay_details?.delayInDays ?? s.seq_delay_details?.delay_in_days ?? 0);
 
-  const inboxCount = (await sl(`/campaigns/${c.id}/email-accounts`)).length;
+  const accounts: any[] = await sl(`/campaigns/${c.id}/email-accounts`);
+  const inboxEmails = accounts
+    .map((a) => String(a.from_email ?? a.email ?? a.email_account?.from_email ?? "").toLowerCase())
+    .filter(Boolean);
+  const inboxCount = accounts.length;
 
   const leadStatus: Record<string, number> = {};
   const categories: Record<string, number> = {};
@@ -125,6 +129,7 @@ async function syncCampaign(c: RawCampaign, cats: Record<string, string>): Promi
     leadStatus,
     categories,
     inboxCount,
+    inboxEmails,
     stats,
   };
 }

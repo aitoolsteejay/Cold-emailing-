@@ -13,6 +13,7 @@ export type Campaign = {
   leadStatus: Record<string, number>; // STARTED / INPROGRESS / COMPLETED / BLOCKED ...
   categories: Record<string, number>; // category name -> lead count, as tagged in Smartlead
   inboxCount: number; // mailboxes attached to this campaign
+  inboxEmails?: string[]; // which mailboxes (missing in data synced before this field existed)
   stats: { sent: number; opened: number; replied: number; bounced: number };
 };
 export type Mailbox = { email: string; domain: string; dailyLimit: number };
