@@ -2,23 +2,12 @@
 
 import { useEffect, useState } from "react";
 import { maxEmailsPerDomain, rules, timezone } from "@/config/rules";
-import {
-  buildInventory,
-  cleanDomain,
-  dayKey,
-  daysBetween,
-  domainOf,
-  domainsForTarget,
-  isDomain,
-  isEmail,
-  isYmd,
-  leadsNeeded,
-  rampUp,
-} from "@/lib/calc";
-import type { Domain, Id, Manual, SyncData } from "@/lib/calc";
+import { buildInventory, dayKey, daysBetween, domainsForTarget, isYmd, leadsNeeded, rampUp } from "@/lib/calc";
+import type { Domain, Id, PurchaseDates, SyncData } from "@/lib/calc";
 
-const K_SYNC = "ce-sync", K_MANUAL = "ce-manual", K_TARGET = "ce-target";
-const OLD_KEYS = ["sl-data", "sl-settings", "sl-planned"]; // from the previous dashboard
+const K_SYNC = "ce-sync", K_DATES = "ce-dates", K_TARGET = "ce-target";
+const K_MANUAL = "ce-manual"; // hand-added domains/ids from the earlier version; only their purchase dates are kept
+const OLD_KEYS = ["sl-data", "sl-settings", "sl-planned", K_MANUAL]; // removed on load
 
 const num = (n: number) => Math.round(n).toLocaleString("en-IN");
 const fmt = (ymd: string) => new Date(ymd + "T00:00:00Z").toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric", timeZone: "UTC" });
@@ -39,10 +28,16 @@ function save(key: string, value: unknown) {
 }
 
 // Drops anything malformed so a bad localStorage value can't break the page
-function cleanManual(m: any): Manual {
-  const domains = Array.isArray(m?.domains) ? m.domains.filter((d: any) => typeof d?.domain === "string" && isYmd(d?.purchasedOn)) : [];
-  const ids = Array.isArray(m?.ids) ? m.ids.filter((i: any) => typeof i?.email === "string" && isYmd(i?.createdOn)) : [];
-  return { domains, ids };
+function cleanDates(d: any): PurchaseDates {
+  const out: PurchaseDates = {};
+  if (d && typeof d === "object" && !Array.isArray(d)) for (const [k, v] of Object.entries(d)) if (isYmd(v)) out[k] = v;
+  return out;
+}
+// Purchase dates typed into the earlier version's "Bought a new domain" form
+function datesFromOldManual(m: any): PurchaseDates {
+  const out: PurchaseDates = {};
+  for (const d of Array.isArray(m?.domains) ? m.domains : []) if (typeof d?.domain === "string" && isYmd(d?.purchasedOn)) out[d.domain] = d.purchasedOn;
+  return out;
 }
 function cleanSync(s: any): SyncData | null {
   return s && typeof s.syncedAt === "string" && Array.isArray(s.accounts) ? s : null;
@@ -86,37 +81,31 @@ function Rep({ value }: { value: number | null }) {
   return <span className={value < rules.lowReputationBelow ? "font-medium text-rose-600" : "text-emerald-700"}>{value.toFixed(0)}%</span>;
 }
 
-const input = "mt-1 block w-full rounded-md border border-slate-300 px-2 py-1.5 text-sm text-slate-900 focus:border-indigo-500 focus:outline-none";
-
 export default function Home() {
   const [today, setToday] = useState("");
   const [sync, setSync] = useState<SyncData | null>(null);
-  const [manual, setManual] = useState<Manual>({ domains: [], ids: [] });
+  const [dates, setDates] = useState<PurchaseDates>({});
   const [target, setTarget] = useState(0);
   const [override, setOverride] = useState<number | null>(null);
   const [syncing, setSyncing] = useState(false);
   const [error, setError] = useState("");
   const [open, setOpen] = useState<string[]>([]);
-  const [domainForm, setDomainForm] = useState({ domain: "", purchasedOn: "", ids: "" });
-  const [idForm, setIdForm] = useState({ email: "", createdOn: "" });
-  const [formMsg, setFormMsg] = useState<{ ok: boolean; text: string } | null>(null);
 
   useEffect(() => {
-    const t = dayKey(new Date(), timezone);
-    setToday(t);
+    setToday(dayKey(new Date(), timezone));
     setSync(cleanSync(load(K_SYNC, null)));
-    setManual(cleanManual(load(K_MANUAL, null)));
+    const d = { ...datesFromOldManual(load(K_MANUAL, null)), ...cleanDates(load(K_DATES, {})) };
+    setDates(d);
+    save(K_DATES, d);
     setTarget(Number(load(K_TARGET, 0)) || 0);
-    setDomainForm((f) => ({ ...f, purchasedOn: t }));
-    setIdForm((f) => ({ ...f, createdOn: t }));
     try {
       for (const k of OLD_KEYS) localStorage.removeItem(k);
     } catch {}
   }, []);
 
-  function saveManual(next: Manual) {
-    setManual(next);
-    save(K_MANUAL, next);
+  function saveDates(next: PurchaseDates) {
+    setDates(next);
+    save(K_DATES, next);
   }
 
   async function runSync() {
@@ -143,76 +132,17 @@ export default function Home() {
 
   if (!today) return <div className="p-8 text-sm text-slate-400">Loading…</div>;
 
-  const domains = buildInventory(manual, sync, today);
-  const allIds = domains.flatMap((d) => d.ids);
-  const unused = allIds.filter((i) => i.unused);
-  const unusedInSmartlead = unused.filter((i) => i.inSmartlead).length;
+  const domains = buildInventory(sync, dates, today);
+  const unused = domains.flatMap((d) => d.ids).filter((i) => i.unused);
   const unusedCount = override ?? unused.length;
   const leads = leadsNeeded(unusedCount);
   const ramp = rampUp(domains);
   const goal = domainsForTarget(target, ramp.maxCapacity);
-  const known = new Set(allIds.map((i) => i.email));
 
-  // ---- manual entry handlers ----
-
+  // Empty value = go back to the date estimated from Smartlead
   function setPurchase(domain: string, ymd: string) {
-    const rest = manual.domains.filter((d) => d.domain !== domain);
-    if (isYmd(ymd)) saveManual({ ...manual, domains: [...rest, { domain, purchasedOn: ymd }] });
-    else if (domains.find((d) => d.domain === domain)?.count) saveManual({ ...manual, domains: rest });
-  }
-
-  function removeDomain(d: Domain) {
-    const synced = d.ids.filter((i) => i.inSmartlead).length;
-    const msg = synced
-      ? `Remove what you added by hand for ${d.domain}? Its ${synced} Smartlead ${synced === 1 ? "id stays" : "ids stay"} until removed in Smartlead.`
-      : `Remove ${d.domain} and its ${plural(d.count, "id")}?`;
-    if (!confirm(msg)) return;
-    saveManual({ domains: manual.domains.filter((x) => x.domain !== d.domain), ids: manual.ids.filter((i) => domainOf(i.email) !== d.domain) });
-  }
-
-  function removeId(email: string) {
-    saveManual({ ...manual, ids: manual.ids.filter((i) => i.email !== email) });
-  }
-
-  function addDomain(e: React.FormEvent) {
-    e.preventDefault();
-    const d = cleanDomain(domainForm.domain);
-    if (!isDomain(d)) return setFormMsg({ ok: false, text: `"${domainForm.domain}" is not a valid domain.` });
-    if (!isYmd(domainForm.purchasedOn)) return setFormMsg({ ok: false, text: "Pick the date you bought the domain." });
-    if (manual.domains.some((x) => x.domain === d)) return setFormMsg({ ok: false, text: `${d} is already listed. Change its date in the table.` });
-    const emails = [
-      ...new Set(
-        domainForm.ids
-          .split(/[\s,;]+/)
-          .filter(Boolean)
-          .map((x) => (x.includes("@") ? x : `${x}@${d}`).toLowerCase()),
-      ),
-    ];
-    const bad = emails.filter((x) => !isEmail(x) || domainOf(x) !== d);
-    if (bad.length) return setFormMsg({ ok: false, text: `These ids don't belong to ${d}: ${bad.join(", ")}` });
-    const fresh = emails.filter((x) => !known.has(x));
-    saveManual({
-      domains: [...manual.domains, { domain: d, purchasedOn: domainForm.purchasedOn }],
-      ids: [...manual.ids, ...fresh.map((email) => ({ email, createdOn: domainForm.purchasedOn }))],
-    });
-    setDomainForm({ domain: "", purchasedOn: today, ids: "" });
-    setFormMsg({ ok: true, text: `Added ${d}${fresh.length ? ` with ${plural(fresh.length, "id")}` : ""}.` });
-  }
-
-  function addId(e: React.FormEvent) {
-    e.preventDefault();
-    const email = idForm.email.trim().toLowerCase();
-    if (!isEmail(email)) return setFormMsg({ ok: false, text: `"${idForm.email}" is not a valid email id.` });
-    if (!isYmd(idForm.createdOn)) return setFormMsg({ ok: false, text: "Pick the date the id was created." });
-    if (known.has(email)) return setFormMsg({ ok: false, text: `${email} is already listed.` });
-    const d = domainOf(email);
-    const newDomain = !domains.some((x) => x.domain === d);
-    saveManual({
-      domains: newDomain ? [...manual.domains, { domain: d, purchasedOn: idForm.createdOn }] : manual.domains,
-      ids: [...manual.ids, { email, createdOn: idForm.createdOn }],
-    });
-    setIdForm({ email: "", createdOn: today });
-    setFormMsg({ ok: true, text: `Added ${email}${newDomain ? ` (new domain ${d}, bought on ${fmt(idForm.createdOn)} — change it in the table if needed)` : ""}.` });
+    const { [domain]: _, ...rest } = dates;
+    saveDates(isYmd(ymd) ? { ...rest, [domain]: ymd } : rest);
   }
 
   function nextStep(d: Domain) {
@@ -225,7 +155,6 @@ export default function Home() {
   }
 
   function idNote(i: Id) {
-    if (!i.inSmartlead) return <Tag kind="slate">{sync ? "Not in Smartlead" : "Added by hand"}</Tag>;
     if (i.campaigns.length) return <span className="text-xs text-slate-500">{i.campaigns.join(", ")}</span>;
     return <Tag kind="amber">Not in any campaign</Tag>;
   }
@@ -274,12 +203,11 @@ export default function Home() {
                   </>
                 ) : (
                   <>
-                    Counted from your ids: {unusedInSmartlead} in Smartlead with no {rules.inUseCampaignStatuses.join("/").toLowerCase()} campaign
-                    {unused.length - unusedInSmartlead > 0 && <>, plus {unused.length - unusedInSmartlead} added by hand and not in Smartlead yet</>}. Type any number to try it.
+                    Smartlead ids with no {rules.inUseCampaignStatuses.join("/").toLowerCase()} campaign. Type any number to try it.
                   </>
                 )}
               </p>
-              {!sync && <p className="mt-2 text-xs text-amber-700">Sync Smartlead so ids already running in campaigns are left out.</p>}
+              {!sync && <p className="mt-2 text-xs text-amber-700">Click Sync Smartlead to load your ids.</p>}
             </div>
             <div className="rounded-xl bg-indigo-600 p-5 text-white">
               <div className="text-xs font-medium uppercase tracking-wide text-indigo-200">Source</div>
@@ -335,7 +263,7 @@ export default function Home() {
         <Card title="Ramp-up plan">
           {ramp.addNow === 0 && ramp.steps.length === 0 ? (
             <p className="text-sm text-slate-500">
-              {ramp.domains ? "Every domain has all its ids. To send more, buy new domains." : "Add your domains below (or sync Smartlead) to see the plan."}
+              {ramp.domains ? "Every domain has all its ids. To send more, buy new domains." : "Sync Smartlead to see the plan."}
             </p>
           ) : (
             <div className="overflow-x-auto">
@@ -411,46 +339,10 @@ export default function Home() {
           </div>
         </Card>
 
-        <Card title="Domains & IDs" right={<span className="text-xs text-slate-400">Smartlead ids are added automatically on sync. Add new domains and ids here as soon as you create them.</span>}>
-          <div className="grid gap-4 lg:grid-cols-2">
-            <form onSubmit={addDomain} className="rounded-lg border border-slate-200 p-4">
-              <div className="mb-3 text-sm font-medium">Bought a new domain</div>
-              <div className="grid gap-3 sm:grid-cols-2">
-                <label className="text-xs text-slate-500">
-                  Domain
-                  <input value={domainForm.domain} onChange={(e) => setDomainForm({ ...domainForm, domain: e.target.value })} placeholder="example.com" className={input} />
-                </label>
-                <label className="text-xs text-slate-500">
-                  Bought on
-                  <input type="date" value={domainForm.purchasedOn} onChange={(e) => setDomainForm({ ...domainForm, purchasedOn: e.target.value })} className={input} />
-                </label>
-                <label className="text-xs text-slate-500 sm:col-span-2">
-                  IDs created (optional, comma separated — names or full emails)
-                  <input value={domainForm.ids} onChange={(e) => setDomainForm({ ...domainForm, ids: e.target.value })} placeholder="john, sarah" className={input} />
-                </label>
-              </div>
-              <button className="mt-3 rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white">Add domain</button>
-            </form>
-            <form onSubmit={addId} className="rounded-lg border border-slate-200 p-4">
-              <div className="mb-3 text-sm font-medium">Created a new id</div>
-              <div className="grid gap-3 sm:grid-cols-2">
-                <label className="text-xs text-slate-500">
-                  Email id
-                  <input value={idForm.email} onChange={(e) => setIdForm({ ...idForm, email: e.target.value })} placeholder="john@example.com" className={input} />
-                </label>
-                <label className="text-xs text-slate-500">
-                  Created on
-                  <input type="date" value={idForm.createdOn} onChange={(e) => setIdForm({ ...idForm, createdOn: e.target.value })} className={input} />
-                </label>
-              </div>
-              <button className="mt-3 rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white">Add id</button>
-            </form>
-          </div>
-          {formMsg && <p className={`mt-3 text-sm ${formMsg.ok ? "text-emerald-700" : "text-rose-700"}`}>{formMsg.text}</p>}
-
-          <div className="mt-5 overflow-x-auto">
+        <Card title="Domains & IDs" right={<span className="text-xs text-slate-400">From Smartlead · refreshed on every sync</span>}>
+          <div className="overflow-x-auto">
             {domains.length === 0 ? (
-              <p className="py-6 text-center text-sm text-slate-400">No domains yet. Sync Smartlead or add one above.</p>
+              <p className="py-6 text-center text-sm text-slate-400">No domains yet. Click Sync Smartlead.</p>
             ) : (
               <table className="w-full text-sm">
                 <thead>
@@ -461,13 +353,11 @@ export default function Home() {
                     <th className="pb-2 font-medium">Emails / day</th>
                     <th className="pb-2 font-medium">Warmup</th>
                     <th className="pb-2 font-medium">Next step</th>
-                    <th />
                   </tr>
                 </thead>
                 <tbody>
                   {domains.map((d) => {
                     const expanded = open.includes(d.domain);
-                    const canRemove = d.manual || d.ids.some((i) => i.manual);
                     return [
                       <tr key={d.domain} className="border-b border-slate-100">
                         <td className="py-2 pr-4">
@@ -490,39 +380,23 @@ export default function Home() {
                         </td>
                         <td className="py-2 pr-4 tabular-nums">{d.capacity}</td>
                         <td className="py-2 pr-4"><Rep value={d.reputation} /></td>
-                        <td className="py-2 pr-4">{nextStep(d)}</td>
-                        <td className="py-2 text-right">
-                          {canRemove && (
-                            <button onClick={() => removeDomain(d)} className="text-xs text-rose-600 hover:underline">
-                              Remove
-                            </button>
-                          )}
-                        </td>
+                        <td className="py-2">{nextStep(d)}</td>
                       </tr>,
                       expanded && (
                         <tr key={d.domain + "-ids"} className="border-b border-slate-100 bg-slate-50">
-                          <td colSpan={7} className="px-6 py-3">
-                            {d.ids.length === 0 ? (
-                              <p className="text-xs text-slate-400">No ids yet. Add them with “Created a new id”.</p>
-                            ) : (
-                              <table className="w-full text-xs">
-                                <tbody>
-                                  {d.ids.map((i) => (
-                                    <tr key={i.email}>
-                                      <td className="py-1 pr-4">{i.email}</td>
-                                      <td className="py-1 pr-4 text-slate-500">{i.createdOn ? fmt(i.createdOn) : "—"}</td>
-                                      <td className="py-1 pr-4"><Rep value={i.reputation} /></td>
-                                      <td className="py-1 pr-4">{idNote(i)}</td>
-                                      <td className="py-1 text-right">
-                                        {i.manual && !i.inSmartlead && (
-                                          <button onClick={() => removeId(i.email)} className="text-rose-600 hover:underline">remove</button>
-                                        )}
-                                      </td>
-                                    </tr>
-                                  ))}
-                                </tbody>
-                              </table>
-                            )}
+                          <td colSpan={6} className="px-6 py-3">
+                            <table className="w-full text-xs">
+                              <tbody>
+                                {d.ids.map((i) => (
+                                  <tr key={i.email}>
+                                    <td className="py-1 pr-4">{i.email}</td>
+                                    <td className="py-1 pr-4 text-slate-500">{i.createdOn ? fmt(i.createdOn) : "—"}</td>
+                                    <td className="py-1 pr-4"><Rep value={i.reputation} /></td>
+                                    <td className="py-1">{idNote(i)}</td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
                           </td>
                         </tr>
                       ),
@@ -533,9 +407,9 @@ export default function Home() {
             )}
           </div>
           {domains.some((d) => d.sinceIsEstimate) && (
-            <p className="mt-3 text-xs text-amber-700">Dashed dates are estimated from the earliest id (Smartlead only knows when an id was added). Set the real purchase date so the ramp-up dates are right.</p>
+            <p className="mt-3 text-xs text-amber-700">Dashed dates are the day the domain's first id was added to Smartlead. If you bought the domain on a different day, set the real date so the ramp-up dates are right.</p>
           )}
-          <p className="mt-2 text-xs text-slate-400">Everything you add here is saved in this browser.</p>
+          <p className="mt-2 text-xs text-slate-400">Purchase dates you set are saved in this browser.</p>
         </Card>
       </section>
     </div>

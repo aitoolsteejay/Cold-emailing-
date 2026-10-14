@@ -15,17 +15,13 @@ export type SyncedAccount = {
 };
 export type SyncData = { syncedAt: string; accounts: SyncedAccount[]; campaignsChecked: number };
 
-// Things added by hand in the UI
-export type ManualDomain = { domain: string; purchasedOn: string }; // YYYY-MM-DD
-export type ManualId = { email: string; createdOn: string }; // YYYY-MM-DD
-export type Manual = { domains: ManualDomain[]; ids: ManualId[] };
+// Purchase dates corrected in the UI: domain -> YYYY-MM-DD
+export type PurchaseDates = Record<string, string>;
 
 export type Id = {
   email: string;
   domain: string;
   createdOn: string | null;
-  manual: boolean; // added by hand
-  inSmartlead: boolean; // found in the last sync
   reputation: number | null;
   warmupStatus: string | null;
   campaigns: string[];
@@ -34,9 +30,8 @@ export type Id = {
 
 export type Domain = {
   domain: string;
-  since: string | null; // purchase date (manual) or, failing that, the earliest id date
+  since: string | null; // purchase date set in the UI or, failing that, the earliest id date
   sinceIsEstimate: boolean;
-  manual: boolean; // has a manual domain record
   ids: Id[];
   count: number;
   capacity: number; // emails / day right now
@@ -45,7 +40,7 @@ export type Domain = {
   addLater: number; // ids that can be added on unlockOn
   allowedNow: number; // max ids the rules allow on this domain today
   overLimit: boolean; // more ids than allowedNow
-  reputation: number | null; // average over synced ids
+  reputation: number | null; // average over the domain's ids
 };
 
 // ---------- Dates (all as YYYY-MM-DD strings) ----------
@@ -76,51 +71,29 @@ export const daysBetween = (from: string, to: string) => Math.round((toUtc(to) -
 
 export const isYmd = (s: unknown): s is string => typeof s === "string" && /^\d{4}-\d{2}-\d{2}$/.test(s);
 
-// ---------- Inventory: Smartlead + manual entries merged by email ----------
+// ---------- Inventory: Smartlead sender accounts grouped by domain ----------
 
-export function buildInventory(manual: Manual, sync: SyncData | null, today: string): Domain[] {
-  const ids = new Map<string, Id>();
+export function buildInventory(sync: SyncData | null, dates: PurchaseDates, today: string): Domain[] {
+  const byDomain = new Map<string, Id[]>();
   for (const a of sync?.accounts ?? []) {
-    ids.set(a.email, {
+    if (!a.domain) continue;
+    const id: Id = {
       email: a.email,
       domain: a.domain,
       createdOn: a.createdOn,
-      manual: false,
-      inSmartlead: true,
       reputation: a.reputation,
       warmupStatus: a.warmupStatus,
       campaigns: a.campaigns,
       unused: a.campaigns.length === 0,
-    });
-  }
-  for (const m of manual.ids) {
-    const existing = ids.get(m.email);
-    if (existing) {
-      existing.manual = true;
-      existing.createdOn = m.createdOn;
-    } else {
-      ids.set(m.email, {
-        email: m.email,
-        domain: domainOf(m.email),
-        createdOn: m.createdOn,
-        manual: true,
-        inSmartlead: false,
-        reputation: null,
-        warmupStatus: null,
-        campaigns: [],
-        unused: true,
-      });
-    }
+    };
+    byDomain.set(a.domain, [...(byDomain.get(a.domain) ?? []), id]);
   }
 
-  const names = new Set<string>([...manual.domains.map((d) => d.domain), ...[...ids.values()].map((i) => i.domain)]);
   const domains: Domain[] = [];
-  for (const name of names) {
-    if (!name) continue;
-    const record = manual.domains.find((d) => d.domain === name);
-    const list = [...ids.values()].filter((i) => i.domain === name).sort((a, b) => a.email.localeCompare(b.email));
-    const idDates = list.map((i) => i.createdOn).filter(isYmd).sort();
-    const since = record?.purchasedOn ?? idDates[0] ?? null;
+  for (const [name, ids] of byDomain) {
+    const list = ids.sort((a, b) => a.email.localeCompare(b.email));
+    const set = isYmd(dates[name]) ? dates[name] : null;
+    const since = set ?? list.map((i) => i.createdOn).filter(isYmd).sort()[0] ?? null;
     const count = list.length;
 
     const unlockOn = since ? addMonths(since, rules.monthsBeforeFullDomain) : null;
@@ -133,8 +106,7 @@ export function buildInventory(manual: Manual, sync: SyncData | null, today: str
     domains.push({
       domain: name,
       since,
-      sinceIsEstimate: !record && since != null,
-      manual: !!record,
+      sinceIsEstimate: !set && since != null,
       ids: list,
       count,
       capacity: Math.min(count, rules.idsPerDomain) * rules.emailsPerId,
@@ -148,24 +120,6 @@ export function buildInventory(manual: Manual, sync: SyncData | null, today: str
   }
   return domains.sort((a, b) => (b.since ?? "").localeCompare(a.since ?? "") || a.domain.localeCompare(b.domain));
 }
-
-export function domainOf(email: string) {
-  return email.split("@")[1] ?? "";
-}
-
-// "Https://www.Example.com/" -> "example.com"
-export function cleanDomain(input: string) {
-  return input
-    .trim()
-    .toLowerCase()
-    .replace(/^https?:\/\//, "")
-    .replace(/^www\./, "")
-    .replace(/^.*@/, "")
-    .replace(/\/.*$/, "");
-}
-
-export const isDomain = (d: string) => /^[a-z0-9-]+(\.[a-z0-9-]+)+$/.test(d);
-export const isEmail = (e: string) => /^[^\s@]+@[a-z0-9-]+(\.[a-z0-9-]+)+$/.test(e);
 
 // ---------- Part 1: lead sourcing ----------
 

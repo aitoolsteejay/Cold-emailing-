@@ -6,9 +6,8 @@ Two tools, nothing else. Next.js + Tailwind, no database.
 2. **Sending capacity & ramp-up** – domains, ids, emails/day now and at full capacity, and when the remaining ids can be added
    (25 emails / id / day, 4 ids / domain; a new domain starts with 2 ids and gets the other 2 one month after it was bought).
 
-Sender accounts, which campaigns they are in, and warmup reputation come from Smartlead (**Sync Smartlead**).
-New domains and ids can be added by hand as soon as they are created; they merge with Smartlead by email address.
-Manual entries are saved in the browser (localStorage).
+Everything comes from Smartlead (**Sync Smartlead**): sender accounts grouped by domain, which campaigns they are in, and warmup reputation.
+The only thing you can change on the page is a domain's purchase date (Smartlead only knows when an id was added); it is saved in the browser.
 
 - `config/rules.ts` – the fixed rules (leads per id, emails per id, ids per domain, ramp-up period, which campaign statuses count as "in use")
 - `lib/calc.ts` – all calculations
