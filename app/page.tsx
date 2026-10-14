@@ -76,6 +76,85 @@ function Kpi({ label, value, sub }: { label: string; value: string; sub?: string
   );
 }
 
+// Explains where the "leads per id" rule comes from. Display only: the numbers come from config/rules.ts
+// (leadsPerId, emailsPerId) plus the follow-up pattern, and nothing here feeds back into the calculations.
+const FOLLOW_UPS = 3;
+const FOLLOW_UP_GAP_DAYS = 5;
+
+function WhyLeadsPerId() {
+  const perDay = rules.emailsPerId;
+  const groups = Math.round(rules.leadsPerId / perDay);
+  const touchDays = Array.from({ length: FOLLOW_UPS + 1 }, (_, n) => 1 + n * FOLLOW_UP_GAP_DAYS); // 1, 6, 11, 16
+
+  return (
+    <aside className="mt-5 rounded-xl border border-indigo-200 bg-indigo-50/60 p-4 md:p-5" aria-labelledby="why-leads-title">
+      <div className="flex items-center gap-2">
+        <span aria-hidden className="flex h-5 w-5 items-center justify-center rounded-full bg-indigo-600 text-xs font-bold text-white">i</span>
+        <h4 id="why-leads-title" className="text-sm font-semibold text-indigo-900">Why {rules.leadsPerId} leads per id?</h4>
+      </div>
+
+      <div className="mt-4 grid gap-5 lg:grid-cols-2">
+        {/* The math, step by step */}
+        <ol className="space-y-3 text-sm text-slate-700">
+          <li className="flex gap-3">
+            <span className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-white text-xs font-semibold text-indigo-700 ring-1 ring-indigo-200">1</span>
+            <span>Each id sends <b>{perDay} emails per day</b>.</span>
+          </li>
+          <li className="flex gap-3">
+            <span className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-white text-xs font-semibold text-indigo-700 ring-1 ring-indigo-200">2</span>
+            <span>Every lead gets <b>1 first email + {FOLLOW_UPS} follow-ups</b>, with follow-ups <b>{FOLLOW_UP_GAP_DAYS} days apart</b>.</span>
+          </li>
+          <li className="flex gap-3">
+            <span className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-white text-xs font-semibold text-indigo-700 ring-1 ring-indigo-200">3</span>
+            <span>
+              So a lead stays in the cycle until its last follow-up, and the id needs <b>{groups} daily groups</b> of leads to stay busy
+              every day, with no idle day and no running out of leads.
+            </span>
+          </li>
+          <li className="rounded-lg bg-white px-3 py-2 font-medium text-indigo-900 ring-1 ring-indigo-200">
+            {perDay} emails/day × {groups} daily groups = <span className="whitespace-nowrap font-bold">{rules.leadsPerId} leads per id</span>
+          </li>
+        </ol>
+
+        {/* Visuals: one lead's timeline, then the six groups */}
+        <div className="space-y-4">
+          <div>
+            <div className="mb-1.5 text-xs font-medium uppercase tracking-wide text-slate-500">One lead&apos;s emails</div>
+            <div className="grid grid-cols-4 gap-2 text-center">
+              {touchDays.map((day, n) => (
+                <div key={day} className="rounded-lg bg-white px-1 py-2 ring-1 ring-indigo-200">
+                  <div className="text-xs text-slate-500">Day {day}</div>
+                  <div className="text-xs font-semibold text-indigo-700">{n === 0 ? "First email" : `Follow-up ${n}`}</div>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <div>
+            <div className="mb-1.5 text-xs font-medium uppercase tracking-wide text-slate-500">{rules.leadsPerId} leads = {groups} groups of {perDay}</div>
+            <div className="grid grid-cols-3 gap-2 sm:grid-cols-6">
+              {Array.from({ length: groups }, (_, g) => (
+                <div key={g} className={`rounded-lg px-1 py-2 text-center ring-1 ring-inset ${g === 0 ? "bg-indigo-600 text-white ring-indigo-600" : "bg-white text-slate-600 ring-indigo-200"}`}>
+                  <div className="text-xs font-semibold">Group {g + 1}</div>
+                  <div className={`text-xs ${g === 0 ? "text-indigo-100" : "text-slate-400"}`}>{perDay} leads</div>
+                </div>
+              ))}
+            </div>
+            <p className="mt-2 text-xs text-slate-600">
+              <span className="font-semibold text-indigo-700">Filled</span> = the group being emailed today. The other groups are in their {FOLLOW_UP_GAP_DAYS}-day follow-up wait.
+              The next day, the next group takes its turn.
+            </p>
+          </div>
+        </div>
+      </div>
+
+      <p className="mt-4 text-xs text-slate-600">
+        Result: the id sends {perDay} emails every day, and every lead gets its follow-ups on schedule.
+      </p>
+    </aside>
+  );
+}
+
 function Rep({ value }: { value: number | null }) {
   if (value == null) return <span className="text-slate-400">—</span>;
   return <span className={value < rules.lowReputationBelow ? "font-medium text-rose-600" : "text-emerald-700"}>{value.toFixed(0)}%</span>;
@@ -218,6 +297,8 @@ export default function Home() {
               </div>
             </div>
           </div>
+
+          <WhyLeadsPerId />
 
           {unused.length > 0 && (
             <details className="mt-5">
