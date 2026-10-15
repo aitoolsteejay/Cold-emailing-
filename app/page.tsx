@@ -140,10 +140,6 @@ function WhyLeadsPerId() {
                 </div>
               ))}
             </div>
-            <p className="mt-2 text-xs text-slate-600">
-              <span className="font-semibold text-indigo-700">Filled</span> = the group being emailed today. The other groups are in their {FOLLOW_UP_GAP_DAYS}-day follow-up wait.
-              The next day, the next group takes its turn.
-            </p>
           </div>
         </div>
       </div>
@@ -152,6 +148,28 @@ function WhyLeadsPerId() {
         Result: the id sends {perDay} emails every day, and every lead gets its follow-ups on schedule.
       </p>
     </aside>
+  );
+}
+
+// Small "i" button that opens a plain-language explanation
+function InfoTip({ children }: { children: React.ReactNode }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <span className="relative ml-1.5 inline-block align-middle">
+      <button
+        type="button"
+        onClick={() => setOpen(!open)}
+        aria-label="How is this counted?"
+        className="flex h-4 w-4 items-center justify-center rounded-full bg-indigo-100 text-[10px] font-bold italic text-indigo-700 hover:bg-indigo-200"
+      >
+        i
+      </button>
+      {open && (
+        <span className="absolute left-0 top-6 z-10 block w-72 rounded-lg border border-indigo-200 bg-white p-3 text-left text-xs font-normal normal-case leading-relaxed tracking-normal text-slate-700 shadow-lg">
+          {children}
+        </span>
+      )}
+    </span>
   );
 }
 
@@ -267,6 +285,15 @@ export default function Home() {
             <div>
               <label className="text-xs font-medium text-slate-500">
                 IDs not in any campaign
+                <InfoTip>
+                  <b>How we find unused ids</b>
+                  <ol className="mt-1 list-decimal space-y-1 pl-4">
+                    <li>We get all your ids (email accounts) from Smartlead.</li>
+                    <li>We look at every campaign that is {rules.inUseCampaignStatuses.map((x) => x.toLowerCase()).join(" or ")} and note which ids are attached to it.</li>
+                    <li>An id that is not attached to any of those campaigns is <b>unused</b>, so it is counted here.</li>
+                  </ol>
+                  <span className="mt-1 block text-slate-500">Stopped or completed campaigns don&apos;t count, so their ids show up as unused. Click Sync Smartlead to refresh.</span>
+                </InfoTip>
                 <input
                   type="number"
                   min={0}
