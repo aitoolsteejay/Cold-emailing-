@@ -289,10 +289,12 @@ export default function Home() {
                   <b>How we find unused ids</b>
                   <ol className="mt-1 list-decimal space-y-1 pl-4">
                     <li>We get all your ids (email accounts) from Smartlead.</li>
-                    <li>We look at every campaign that is {rules.inUseCampaignStatuses.map((x) => x.toLowerCase()).join(" or ")} and note which ids are attached to it.</li>
-                    <li>An id that is not attached to any of those campaigns is <b>unused</b>, so it is counted here.</li>
+                    <li>We look only at <b>{rules.inUseCampaignStatuses.map((x) => x.toLowerCase()).join(" or ")}</b> campaigns, the ones that are really sending, and note which ids are attached to them.</li>
+                    <li>An id that is not in any of those campaigns is <b>unused</b>, so it is counted here.</li>
                   </ol>
-                  <span className="mt-1 block text-slate-500">Stopped or completed campaigns don&apos;t count, so their ids show up as unused. Click Sync Smartlead to refresh.</span>
+                  <span className="mt-1 block text-slate-500">
+                    Being attached to a paused, drafted or stopped campaign does not count as in use, because nothing is sending. If an id is in two campaigns, it stays in use as long as one of them is active.
+                  </span>
                 </InfoTip>
                 <input
                   type="number"

@@ -10,7 +10,7 @@ Two tools, nothing else. Next.js + Tailwind, no database.
 Everything comes from Smartlead (**Sync Smartlead**): sender accounts grouped by domain, which campaigns they are in, and warmup reputation.
 The only thing you can change on the page is a domain's purchase date (Smartlead only knows when an id was added); it is saved in the browser.
 
-- `config/rules.ts` – the fixed rules (leads per id, emails per id, ids per domain, ramp-up period, which campaign statuses count as "in use")
+- `config/rules.ts` – the fixed rules (leads per id, emails per id, ids per domain, ramp-up period, which campaign statuses count as "in use": only active ones)
 - `lib/calc.ts` – all calculations
 - `app/api/sync/route.ts` – Smartlead sync (server-side only)
 - `app/page.tsx` – the page

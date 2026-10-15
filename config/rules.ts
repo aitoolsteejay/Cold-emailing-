@@ -12,7 +12,7 @@ export const rules = {
   monthsBeforeFullDomain: 1, // after this many months the remaining ids can be added
 
   // Smartlead
-  inUseCampaignStatuses: ["ACTIVE", "PAUSED", "DRAFTED"], // an id attached to a campaign in one of these is "in use"
+  inUseCampaignStatuses: ["ACTIVE"], // an id attached to a campaign in one of these is "in use" (paused/drafted campaigns send nothing, so their ids count as unused)
   lowReputationBelow: 90, // warmup reputation (%) under this is flagged red
 };
 
